@@ -9,10 +9,6 @@ module.exports = (() => {
   class GitBackupPlugin extends Plugin {
     onload() {
       console.log("Git Backup plugin loaded");
-      console.assert(
-        this.app.isMobile === false,
-        "Git plugin only works on desktop",
-      );
 
       this.addCommand({
         id: "git-backup",
