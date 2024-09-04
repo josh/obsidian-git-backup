@@ -1,5 +1,5 @@
 module.exports = (() => {
-  const { Plugin, Notice } = require("obsidian");
+  const { Plugin, Notice, FileSystemAdapter } = require("obsidian");
   const path = require("node:path");
   const util = require("node:util");
 
@@ -38,7 +38,13 @@ module.exports = (() => {
       const git = await whichGit(shellEnv);
       console.log("git path", git);
 
-      const gitWorkTree = this.app.vault.adapter.basePath;
+      const dataAdapter = this.app.vault.adapter;
+      assert(
+        dataAdapter instanceof FileSystemAdapter,
+        "dataAdapter is FileSystemAdapter",
+      );
+
+      const gitWorkTree = dataAdapter.getBasePath();
       const gitDir = path.join(gitWorkTree, ".git");
 
       await gitFsck(git, gitDir);
@@ -66,7 +72,7 @@ module.exports = (() => {
    */
   async function getShellEnv() {
     const shell = process.env.SHELL;
-    if (!shell) throw new Error("SHELL environment variable is not set");
+    assert(shell, "SHELL environment variable is set");
     const { stdout } = await execFile(shell, ["-l", "-c", "env"], {
       env: process.env,
     });
@@ -207,6 +213,15 @@ module.exports = (() => {
         hour12: false,
       })
       .replace(/(\d+)\/(\d+)\/(\d+),/, "$3-$1-$2");
+  }
+
+  /**
+   * @param {any} value
+   * @param {string} message
+   * @returns {asserts value}
+   */
+  function assert(value, message) {
+    console.assert(value, message);
   }
 
   return GitBackupPlugin;
