@@ -65,9 +65,12 @@ module.exports = (() => {
    * @returns {Promise<Record<string, string>>}
    */
   async function getShellEnv() {
-    const { stdout } = await execFile(process.env.SHELL, ["-l", "-c", "env"], {
+    const shell = process.env.SHELL;
+    if (!shell) throw new Error("SHELL environment variable is not set");
+    const { stdout } = await execFile(shell, ["-l", "-c", "env"], {
       env: process.env,
     });
+    /** @type {Record<string, string>} */
     const env = {};
     for (const line of stdout.split("\n")) {
       const [key, value] = line.split("=", 2);
