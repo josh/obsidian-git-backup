@@ -1,0 +1,18 @@
+{
+  "name": "obsidian-git-backup",
+  "version": "0.1.0",
+  "description": "Backup your Obsidian vault to a remote Git repository",
+  "main": "main.js",
+  "author": "Joshua Peek",
+  "license": "MIT",
+  "scripts": {
+    "test": "prettier --check . && tsc"
+  },
+  "dependencies": {
+    "obsidian": ">=1.6.0"
+  },
+  "devDependencies": {
+    "prettier": "^3.3.3",
+    "typescript": "^5.5.4"
+  }
+}
