@@ -1,11 +1,14 @@
 module.exports = (() => {
   const obsidian = require("obsidian");
   const { Plugin, Notice } = obsidian;
+
+  const child_process = require("node:child_process");
+  const fs = require("node:fs");
   const path = require("node:path");
   const util = require("node:util");
 
-  const child_process = require("node:child_process");
   const execFile = util.promisify(child_process.execFile);
+  const unlink = util.promisify(fs.unlink);
 
   class GitBackupPlugin extends Plugin {
     onload() {
@@ -230,13 +233,14 @@ module.exports = (() => {
     gitUserName,
     gitUserEmail,
   ) {
+    const randSuffix = Math.random().toString(36).substring(2, 15);
+    const indexFile = path.join(gitDir, `index.${randSuffix}`);
     const env = {
       GIT_DIR: gitDir,
-      // TODO: Use a tmp file, then I think I don't need to run reset
-      GIT_INDEX_FILE: path.join(gitDir, "index"),
+      GIT_INDEX_FILE: indexFile,
       GIT_WORK_TREE: gitWorkTree,
     };
-    await execFile(gitBinPath, ["reset", "--mixed"], { env: env });
+    // await execFile(gitBinPath, ["reset", "--mixed"], { env: env });
     await execFile(gitBinPath, ["add", "."], { env: env });
     await execFile(gitBinPath, ["commit", "--message", commitMessage], {
       env: {
@@ -247,13 +251,15 @@ module.exports = (() => {
         ...env,
       },
     });
-    const { stdout } = await execFile(gitBinPath, ["rev-parse", "HEAD"], {
-      env: env,
-    });
+
     // TODO:
     //   rm "$GIT_DIR/ORIG_HEAD"
     //   rm "$GIT_DIR/COMMIT_EDITMSG"
-    //   rm "$GIT_INDEX_FILE"
+    await unlink(indexFile);
+
+    const { stdout } = await execFile(gitBinPath, ["rev-parse", "HEAD"], {
+      env: env,
+    });
     console.log("git commit:", stdout.trim());
     return stdout.trim();
   }
