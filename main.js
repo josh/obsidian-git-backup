@@ -4,11 +4,12 @@ module.exports = (() => {
 
   const child_process = require("node:child_process");
   const fs = require("node:fs");
+  const os = require("node:os");
   const path = require("node:path");
   const util = require("node:util");
 
+  const { access, unlink } = require("node:fs/promises");
   const execFile = util.promisify(child_process.execFile);
-  const unlink = util.promisify(fs.unlink);
 
   class GitBackupPlugin extends Plugin {
     onload() {
@@ -29,6 +30,7 @@ module.exports = (() => {
               new Notice("Git backup complete");
             })
             .catch((error) => {
+              console.error(error);
               new Notice(`Error creating Git backup: ${error}`);
             });
         },
@@ -43,8 +45,6 @@ module.exports = (() => {
      * Load data with defaults.
      * @returns {Promise<{
      *   gitBinPath: string,
-     *   gitDir: string,
-     *   gitRemoteName: string,
      *   gitRemoteURL: string,
      *   gitBranchName: string,
      *   gitBinPath: string,
@@ -55,8 +55,6 @@ module.exports = (() => {
     async loadDataWithDefaults() {
       let data = {
         gitBinPath: "/usr/bin/git",
-        gitDir: "",
-        gitRemoteName: "origin",
         gitRemoteURL: "",
         gitBranchName: "main",
         gitUserName: "",
@@ -68,16 +66,6 @@ module.exports = (() => {
         data = { ...data, ...localData };
       }
 
-      if (data.gitDir === "") {
-        const dataAdapter = this.app.vault.adapter;
-        assert(
-          dataAdapter instanceof obsidian.FileSystemAdapter,
-          "dataAdapter is FileSystemAdapter",
-        );
-
-        data.gitDir = path.join(dataAdapter.getBasePath(), ".git");
-      }
-
       const shellEnv = await getShellEnv();
       const gitBinPath = await whichGit(shellEnv);
       if (gitBinPath) {
@@ -85,10 +73,18 @@ module.exports = (() => {
       }
 
       if (data.gitUserName === "") {
-        data.gitUserName = await getGitConfig("user.name", shellEnv);
+        data.gitUserName = await getGitGlobalConfig(
+          data.gitBinPath,
+          "user.name",
+          shellEnv,
+        );
       }
       if (data.gitUserEmail === "") {
-        data.gitUserEmail = await getGitConfig("user.email", shellEnv);
+        data.gitUserEmail = await getGitGlobalConfig(
+          data.gitBinPath,
+          "user.email",
+          shellEnv,
+        );
       }
 
       console.log("git-backup data", data);
@@ -100,13 +96,11 @@ module.exports = (() => {
       const data = await this.loadDataWithDefaults();
       const {
         gitBinPath,
-        gitDir,
-        gitRemoteName,
+        gitRemoteURL,
         gitBranchName,
         gitUserName,
         gitUserEmail,
       } = data;
-
       const dataAdapter = this.app.vault.adapter;
       assert(
         dataAdapter instanceof obsidian.FileSystemAdapter,
@@ -114,19 +108,22 @@ module.exports = (() => {
       );
       const gitWorkTree = dataAdapter.getBasePath();
 
-      await gitFetch(gitBinPath, gitDir, gitRemoteName, gitBranchName);
+      const vaultName = this.app.vault.getName();
+      const cacheGitDir = path.join(getCacheDir(), `${vaultName}.git`);
+
+      assert(gitRemoteURL, "gitRemoteURL isn't set");
+      await gitFetch(gitBinPath, cacheGitDir, gitRemoteURL);
 
       const commitMessage = `vault backup: ${getTimestamp()}`;
       await gitCommitAll(
         gitBinPath,
-        gitDir,
+        cacheGitDir,
         gitWorkTree,
         commitMessage,
         gitUserName,
         gitUserEmail,
       );
-
-      await gitPush(gitBinPath, gitDir, gitRemoteName, gitBranchName);
+      await gitPush(gitBinPath, cacheGitDir, "origin", gitBranchName);
     }
   }
 
@@ -164,41 +161,44 @@ module.exports = (() => {
   /**
    * Get git config global value.
    *
+   * @param {string} gitBinPath
    * @param {string} name
-   * @param {Record<string, string>} env
+   * @param {Record<string, string>} shellEnv
    * @returns {Promise<string>}
    */
-  async function getGitConfig(name, env) {
-    const { stdout } = await execFile(
-      "git",
-      ["config", "--global", "get", name],
-      {
-        env,
-      },
-    );
+  async function getGitGlobalConfig(gitBinPath, name, shellEnv) {
+    const git = execEnv.bind(null, gitBinPath, shellEnv);
+    const { stdout } = await git(["config", "--global", name]);
     return stdout.trim();
   }
 
   /**
-   * Run `git fetch` in the given git directory.
+   * Fetch or clone a git repository.
+   *
    * @param {string} gitBinPath
    * @param {string} gitDir
-   * @param {string} repository
-   * @param {string} refspec
+   * @param {string} url
    * @returns {Promise<void>}
    */
-  async function gitFetch(gitBinPath, gitDir, repository, refspec) {
+  async function gitFetch(gitBinPath, gitDir, url) {
     const env = { GIT_DIR: gitDir };
-    const { stderr } = await execFile(
-      gitBinPath,
-      ["fetch", repository, refspec],
-      { env },
-    );
-    console.log("git fetch:", stderr);
+    const git = execEnv.bind(null, gitBinPath, env);
+
+    if (await exists(gitDir)) {
+      const { stdout } = await git(["config", "--local", "remote.origin.url"]);
+      assert(stdout.trim() === url, "Unexpected remote URL");
+
+      const { stderr } = await git(["fetch", "origin"]);
+      console.log("git fetch:", stderr);
+    } else {
+      console.log("git cloning", url);
+      await git(["clone", "--bare", url, gitDir]);
+    }
   }
 
   /**
-   * Run `git push` in the given git directory.
+   * Push local git changes to remote.
+   *
    * @param {string} gitBinPath
    * @param {string} gitDir
    * @param {string} repository
@@ -207,11 +207,8 @@ module.exports = (() => {
    */
   async function gitPush(gitBinPath, gitDir, repository, refspec) {
     const env = { GIT_DIR: gitDir };
-    const { stderr } = await execFile(
-      gitBinPath,
-      ["push", repository, refspec],
-      { env },
-    );
+    const git = execEnv.bind(null, gitBinPath, env);
+    const { stderr } = await git(["push", repository, refspec]);
     console.log("git push:", stderr);
   }
 
@@ -223,7 +220,7 @@ module.exports = (() => {
    * @param {string} commitMessage
    * @param {string} gitUserName
    * @param {string} gitUserEmail
-   * @returns {Promise<string>}
+   * @returns {Promise<string | null>}
    */
   async function gitCommitAll(
     gitBinPath,
@@ -245,23 +242,47 @@ module.exports = (() => {
       GIT_COMMITTER_NAME: gitUserName,
       GIT_COMMITTER_EMAIL: gitUserEmail,
     };
+    const git = execEnv.bind(null, gitBinPath, env);
 
-    await execFile(gitBinPath, ["add", "."], {
-      env: env,
-    });
+    try {
+      // I don't think I need to reset the index if I'm using a temp file
+      // await git(["reset", "--mixed", "HEAD"]);
 
-    await execFile(gitBinPath, ["commit", "--message", commitMessage], {
-      env: env,
-    });
+      await git(["add", "."]);
 
-    await unlink(path.join(gitDir, "COMMIT_EDITMSG"));
-    await unlink(indexFile);
+      let hasChanges;
+      try {
+        await git(["diff", "--staged", "--quiet"]);
+        hasChanges = false;
+      } catch (error) {
+        hasChanges = true;
+      }
 
-    const { stdout } = await execFile(gitBinPath, ["rev-parse", "HEAD"], {
-      env: env,
-    });
-    console.log("git commit:", stdout.trim());
-    return stdout.trim();
+      if (hasChanges) {
+        await git(["commit", "--message", commitMessage]);
+        const { stdout } = await git(["rev-parse", "HEAD"]);
+        console.log("git commit:", stdout.trim());
+        return stdout.trim();
+      } else {
+        console.log("git commit: no changes");
+        return null;
+      }
+    } finally {
+      await unlinkForce(path.join(gitDir, "COMMIT_EDITMSG"));
+      await unlinkForce(indexFile);
+    }
+  }
+
+  /**
+   * Run command with given environment and arguments.
+   *
+   * @param {string} file
+   * @param {Record<string, string>} env
+   * @param {string[]} args
+   * @returns {Promise<{ stdout: string; stderr: string }>}
+   */
+  async function execEnv(file, env, args) {
+    return await execFile(file, args, { env });
   }
 
   /**
@@ -283,6 +304,69 @@ module.exports = (() => {
         hour12: false,
       })
       .replace(/(\d+)\/(\d+)\/(\d+),/, "$3-$1-$2");
+  }
+
+  /**
+   * Get platform cache directory.
+   *
+   * macOS: `$HOME/Library/Caches/obsidian-git-backup`
+   * Linux: `$XDG_CACHE_HOME/obsidian-git-backup` or
+   *        `$HOME/.cache/obsidian-git-backup`
+   * Windows: `%LOCALAPPDATA%\obsidian-git-backup\Cache`
+   */
+  function getCacheDir() {
+    const platform = process.platform;
+    const home = os.homedir();
+    assert(home, "HOME is not set");
+
+    if (platform === "darwin") {
+      return path.join(home, "Library", "Caches", "obsidian-git-backup");
+    } else if (platform === "linux") {
+      const cacheHome = process.env.XDG_CACHE_HOME || path.join(home, ".cache");
+      return path.join(cacheHome, "obsidian-git-backup");
+    } else if (platform === "win32") {
+      const localAppData = process.env.LOCALAPPDATA;
+      assert(localAppData, "LOCALAPPDATA is not set");
+      return path.join(localAppData, "obsidian-git-backup", "Cache");
+    } else {
+      throw new Error(`Unsupported platform: ${platform}`);
+    }
+  }
+
+  /**
+   * Check if a file or directory exists.
+   *
+   * @param {fs.PathLike} path
+   * @returns {Promise<boolean>}
+   */
+  async function exists(path) {
+    try {
+      await access(path, fs.constants.F_OK);
+      return true;
+    } catch (error) {
+      return false;
+    }
+  }
+
+  /**
+   * Unlink file or ignore if it doesn't exist.
+   * Basically `rm -f`.
+   *
+   * @param {fs.PathLike} path
+   * @returns {Promise<void>}
+   */
+  async function unlinkForce(path) {
+    try {
+      await unlink(path);
+    } catch (error) {
+      if (
+        error instanceof Error &&
+        "code" in error &&
+        error.code !== "ENOENT"
+      ) {
+        throw error;
+      }
+    }
   }
 
   /**
