@@ -1,5 +1,6 @@
 module.exports = (() => {
-  const { Plugin, Notice, FileSystemAdapter } = require("obsidian");
+  const obsidian = require("obsidian");
+  const { Plugin, Notice } = obsidian;
   const path = require("node:path");
   const util = require("node:util");
 
@@ -9,6 +10,10 @@ module.exports = (() => {
   class GitBackupPlugin extends Plugin {
     onload() {
       console.log("Git Backup plugin loaded");
+
+      const item = this.addStatusBarItem();
+      obsidian.setIcon(item, "git-branch");
+      item.createEl("span", { text: " No changes" });
 
       this.addCommand({
         id: "git-backup",
@@ -40,7 +45,7 @@ module.exports = (() => {
 
       const dataAdapter = this.app.vault.adapter;
       assert(
-        dataAdapter instanceof FileSystemAdapter,
+        dataAdapter instanceof obsidian.FileSystemAdapter,
         "dataAdapter is FileSystemAdapter",
       );
 
