@@ -235,26 +235,26 @@ module.exports = (() => {
   ) {
     const randSuffix = Math.random().toString(36).substring(2, 15);
     const indexFile = path.join(gitDir, `index.${randSuffix}`);
+
     const env = {
       GIT_DIR: gitDir,
       GIT_INDEX_FILE: indexFile,
       GIT_WORK_TREE: gitWorkTree,
+      GIT_AUTHOR_NAME: gitUserName,
+      GIT_AUTHOR_EMAIL: gitUserEmail,
+      GIT_COMMITTER_NAME: gitUserName,
+      GIT_COMMITTER_EMAIL: gitUserEmail,
     };
-    // await execFile(gitBinPath, ["reset", "--mixed"], { env: env });
-    await execFile(gitBinPath, ["add", "."], { env: env });
-    await execFile(gitBinPath, ["commit", "--message", commitMessage], {
-      env: {
-        GIT_AUTHOR_NAME: gitUserName,
-        GIT_AUTHOR_EMAIL: gitUserEmail,
-        GIT_COMMITTER_NAME: gitUserName,
-        GIT_COMMITTER_EMAIL: gitUserEmail,
-        ...env,
-      },
+
+    await execFile(gitBinPath, ["add", "."], {
+      env: env,
     });
 
-    // TODO:
-    //   rm "$GIT_DIR/ORIG_HEAD"
-    //   rm "$GIT_DIR/COMMIT_EDITMSG"
+    await execFile(gitBinPath, ["commit", "--message", commitMessage], {
+      env: env,
+    });
+
+    await unlink(path.join(gitDir, "COMMIT_EDITMSG"));
     await unlink(indexFile);
 
     const { stdout } = await execFile(gitBinPath, ["rev-parse", "HEAD"], {
