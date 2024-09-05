@@ -13,7 +13,7 @@ module.exports = (() => {
 
       const item = this.addStatusBarItem();
       obsidian.setIcon(item, "git-branch");
-      item.createEl("span", { text: " No changes" });
+      item.createEl("span", { text: "No changes" });
 
       this.addCommand({
         id: "git-backup",
@@ -36,12 +36,48 @@ module.exports = (() => {
       console.log("Git Backup plugin unloaded");
     }
 
+    /**
+     * Load data with defaults.
+     * @returns {Promise<{
+     *   gitBinPath: string,
+     *   gitRemoteName: string,
+     *   gitRemoteURL: string,
+     *   gitBranchName: string,
+     *   gitBinPath: string,
+     *   gitUserName: string,
+     *   gitUserEmail: string,
+     * }>}
+     */
+    async loadDataWithDefaults() {
+      let data = {
+        gitBinPath: "/usr/bin/git",
+        gitRemoteName: "origin",
+        gitRemoteURL: "",
+        gitBranchName: "main",
+        gitUserName: "",
+        gitUserEmail: "",
+      };
+
+      const localData = await this.loadData();
+      if (localData !== undefined) {
+        data = { ...data, ...localData };
+      }
+
+      const shellEnv = await getShellEnv();
+      const gitBinPath = await whichGit(shellEnv);
+      if (gitBinPath) {
+        data.gitBinPath = gitBinPath;
+      }
+
+      return data;
+    }
+
     async gitSync() {
+      const data = await this.loadDataWithDefaults();
+      const git = data.gitBinPath;
+
       const shellEnv = await getShellEnv();
       console.log("shell env", shellEnv);
-
-      const git = await whichGit(shellEnv);
-      console.log("git path", git);
 
       const dataAdapter = this.app.vault.adapter;
       assert(
