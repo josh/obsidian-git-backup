@@ -47,9 +47,7 @@ module.exports = (() => {
       const gitWorkTree = dataAdapter.getBasePath();
       const gitDir = path.join(gitWorkTree, ".git");
 
-      await gitFsck(git, gitDir);
       await gitFetch(git, gitDir, "origin", "main");
-      await gitGC(git, gitDir);
 
       const commitMessage = `vault backup: ${getTimestamp()}`;
       await gitCommitAll(
@@ -111,30 +109,6 @@ module.exports = (() => {
       { env },
     );
     console.log("git fetch:", stderr);
-  }
-
-  /**
-   * Run `git fsck` in the given git directory.
-   * @param {string} gitBinPath
-   * @param {string} gitDir
-   * @returns {Promise<void>}
-   */
-  async function gitFsck(gitBinPath, gitDir) {
-    const env = { GIT_DIR: gitDir };
-    await execFile(gitBinPath, ["fsck"], { env: env });
-    console.log("git fsck: okay");
-  }
-
-  /**
-   * Run `git gc` in the given git directory.
-   * @param {string} gitBinPath
-   * @param {string} gitDir
-   * @returns {Promise<void>}
-   */
-  async function gitGC(gitBinPath, gitDir) {
-    const env = { GIT_DIR: gitDir };
-    await execFile(gitBinPath, ["gc", "--prune=now"], { env });
-    console.log("git gc: done");
   }
 
   /**
