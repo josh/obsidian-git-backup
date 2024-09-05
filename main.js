@@ -81,15 +81,28 @@ module.exports = (() => {
         data.gitBinPath = gitBinPath;
       }
 
+      if (data.gitUserName === "") {
+        data.gitUserName = await getGitConfig("user.name", shellEnv);
+      }
+      if (data.gitUserEmail === "") {
+        data.gitUserEmail = await getGitConfig("user.email", shellEnv);
+      }
+
+      console.log("git-backup data", data);
+
       return data;
     }
 
     async gitSync() {
       const data = await this.loadDataWithDefaults();
-      const { gitBinPath, gitDir, gitRemoteName, gitBranchName } = data;
-
-      const shellEnv = await getShellEnv();
-      console.log("shell env", shellEnv);
+      const {
+        gitBinPath,
+        gitDir,
+        gitRemoteName,
+        gitBranchName,
+        gitUserName,
+        gitUserEmail,
+      } = data;
 
       const dataAdapter = this.app.vault.adapter;
       assert(
@@ -104,10 +117,10 @@ module.exports = (() => {
       await gitCommitAll(
         gitBinPath,
         gitDir,
-        path.join(gitDir, "index"),
         gitWorkTree,
-        shellEnv,
         commitMessage,
+        gitUserName,
+        gitUserEmail,
       );
 
       await gitPush(gitBinPath, gitDir, gitRemoteName, gitBranchName);
@@ -136,11 +149,30 @@ module.exports = (() => {
 
   /**
    * Get the path to the git binary.
+   *
    * @param {Record<string, string>} env
    * @returns {Promise<string>}
    */
   async function whichGit(env) {
     const { stdout } = await execFile("which", ["git"], { env });
+    return stdout.trim();
+  }
+
+  /**
+   * Get git config global value.
+   *
+   * @param {string} name
+   * @param {Record<string, string>} env
+   * @returns {Promise<string>}
+   */
+  async function getGitConfig(name, env) {
+    const { stdout } = await execFile(
+      "git",
+      ["config", "--global", "get", name],
+      {
+        env,
+      },
+    );
     return stdout.trim();
   }
 
@@ -184,29 +216,36 @@ module.exports = (() => {
    * Run `git commit` in the given git directory.
    * @param {string} gitBinPath
    * @param {string} gitDir
-   * @param {string} gitIndexFile
    * @param {string} gitWorkTree
-   * @param {Record<string, string>} commitEnv
    * @param {string} commitMessage
+   * @param {string} gitUserName
+   * @param {string} gitUserEmail
    * @returns {Promise<string>}
    */
   async function gitCommitAll(
     gitBinPath,
     gitDir,
-    gitIndexFile,
     gitWorkTree,
-    commitEnv,
     commitMessage,
+    gitUserName,
+    gitUserEmail,
   ) {
     const env = {
       GIT_DIR: gitDir,
-      GIT_INDEX_FILE: gitIndexFile,
+      // TODO: Use a tmp file, then I think I don't need to run reset
+      GIT_INDEX_FILE: path.join(gitDir, "index"),
       GIT_WORK_TREE: gitWorkTree,
     };
     await execFile(gitBinPath, ["reset", "--mixed"], { env: env });
     await execFile(gitBinPath, ["add", "."], { env: env });
     await execFile(gitBinPath, ["commit", "--message", commitMessage], {
-      env: { ...commitEnv, ...env },
+      env: {
+        GIT_AUTHOR_NAME: gitUserName,
+        GIT_AUTHOR_EMAIL: gitUserEmail,
+        GIT_COMMITTER_NAME: gitUserName,
+        GIT_COMMITTER_EMAIL: gitUserEmail,
+        ...env,
+      },
     });
     const { stdout } = await execFile(gitBinPath, ["rev-parse", "HEAD"], {
       env: env,
