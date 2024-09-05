@@ -40,6 +40,7 @@ module.exports = (() => {
      * Load data with defaults.
      * @returns {Promise<{
      *   gitBinPath: string,
+     *   gitDir: string,
      *   gitRemoteName: string,
      *   gitRemoteURL: string,
      *   gitBranchName: string,
@@ -51,6 +52,7 @@ module.exports = (() => {
     async loadDataWithDefaults() {
       let data = {
         gitBinPath: "/usr/bin/git",
+        gitDir: "",
         gitRemoteName: "origin",
         gitRemoteURL: "",
         gitBranchName: "main",
@@ -61,6 +63,16 @@ module.exports = (() => {
       const localData = await this.loadData();
       if (localData !== undefined) {
         data = { ...data, ...localData };
+      }
+
+      if (data.gitDir === "") {
+        const dataAdapter = this.app.vault.adapter;
+        assert(
+          dataAdapter instanceof obsidian.FileSystemAdapter,
+          "dataAdapter is FileSystemAdapter",
+        );
+
+        data.gitDir = path.join(dataAdapter.getBasePath(), ".git");
       }
 
       const shellEnv = await getShellEnv();
@@ -74,7 +86,7 @@ module.exports = (() => {
 
     async gitSync() {
       const data = await this.loadDataWithDefaults();
-      const git = data.gitBinPath;
+      const { gitBinPath, gitDir, gitRemoteName, gitBranchName } = data;
 
       const shellEnv = await getShellEnv();
       console.log("shell env", shellEnv);
@@ -84,15 +96,13 @@ module.exports = (() => {
         dataAdapter instanceof obsidian.FileSystemAdapter,
         "dataAdapter is FileSystemAdapter",
       );
-
       const gitWorkTree = dataAdapter.getBasePath();
-      const gitDir = path.join(gitWorkTree, ".git");
 
-      await gitFetch(git, gitDir, "origin", "main");
+      await gitFetch(gitBinPath, gitDir, gitRemoteName, gitBranchName);
 
       const commitMessage = `vault backup: ${getTimestamp()}`;
       await gitCommitAll(
-        git,
+        gitBinPath,
         gitDir,
         path.join(gitDir, "index"),
         gitWorkTree,
@@ -100,7 +110,7 @@ module.exports = (() => {
         commitMessage,
       );
 
-      await gitPush(git, gitDir, "origin", "main");
+      await gitPush(gitBinPath, gitDir, gitRemoteName, gitBranchName);
     }
   }
 
