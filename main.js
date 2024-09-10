@@ -1,6 +1,6 @@
 module.exports = (() => {
   const obsidian = require("obsidian");
-  const { Plugin, Notice } = obsidian;
+  const { Plugin, PluginSettingTab, Setting, Notice } = obsidian;
 
   const child_process = require("node:child_process");
   const fs = require("node:fs");
@@ -11,23 +11,68 @@ module.exports = (() => {
   const { access, unlink } = require("node:fs/promises");
   const execFile = util.promisify(child_process.execFile);
 
-  class GitBackupPlugin extends Plugin {
-    onload() {
-      console.log("Git Backup plugin loaded");
+  const DEFAULT_SETTINGS = Object.freeze({
+    gitRemoteURL: "",
+    gitBranchName: "main",
+    gitUserName: "",
+    gitUserEmail: "",
+  });
 
-      const item = this.addStatusBarItem();
-      obsidian.setIcon(item, "git-branch");
-      item.createEl("span", { text: "No changes" });
+  class GitBackupPlugin extends Plugin {
+    /**
+     * @type {{
+     *   gitRemoteURL: string,
+     *   gitBranchName: string,
+     *   gitUserName: string,
+     *   gitUserEmail: string
+     * }}
+     */
+    settings = DEFAULT_SETTINGS;
+
+    /** @type {string | null} */
+    gitBinPath = null;
+
+    /** @type {HTMLElement | null} */
+    statusBarItem = null;
+
+    /** @type {boolean} */
+    statusBarUpdateLock = false;
+
+    async onload() {
+      this.gitBinPath = await detectGit();
+      if (this.gitBinPath === null) {
+        console.warn("Failed to load git-backup plugin, git not found");
+        return;
+      }
+      console.log("Using git", this.gitBinPath);
+
+      await this.loadSettings();
+      this.addSettingTab(new GitBackupSettingTab(this.app, this));
+
+      this.initStatusBarItem();
+      this.enqueueUpdateStatusBar();
+      this.registerEvent(
+        this.app.vault.on("create", this.enqueueUpdateStatusBar.bind(this)),
+      );
+      this.registerEvent(
+        this.app.vault.on("modify", this.enqueueUpdateStatusBar.bind(this)),
+      );
+      this.registerEvent(
+        this.app.vault.on("delete", this.enqueueUpdateStatusBar.bind(this)),
+      );
+      this.registerEvent(
+        this.app.vault.on("rename", this.enqueueUpdateStatusBar.bind(this)),
+      );
 
       this.addCommand({
         id: "git-backup",
         name: "Backup",
         callback: () => {
-          console.log("Creating Git backup");
-
+          const start = Date.now();
           this.gitSync()
             .then(() => {
-              new Notice("Git backup complete");
+              const duration = Date.now() - start;
+              new Notice(`Git backup completed in ${duration}ms`);
             })
             .catch((error) => {
               console.error(error);
@@ -37,94 +82,189 @@ module.exports = (() => {
       });
     }
 
-    unload() {
-      console.log("Git Backup plugin unloaded");
+    async unload() {
+      if (this.statusBarItem) {
+        this.statusBarItem.remove();
+        this.statusBarItem = null;
+      }
+      this.statusBarUpdateLock = false;
+      // TODO: Unload settings
     }
 
     /**
-     * Load data with defaults.
-     * @returns {Promise<{
-     *   gitBinPath: string,
-     *   gitRemoteURL: string,
-     *   gitBranchName: string,
-     *   gitBinPath: string,
-     *   gitUserName: string,
-     *   gitUserEmail: string,
-     * }>}
+     * Load settings from disk.
+     * @returns {Promise<void>}
      */
-    async loadDataWithDefaults() {
-      let data = {
-        gitBinPath: "/usr/bin/git",
-        gitRemoteURL: "",
-        gitBranchName: "main",
-        gitUserName: "",
-        gitUserEmail: "",
-      };
-
-      const localData = await this.loadData();
-      if (localData !== undefined) {
-        data = { ...data, ...localData };
-      }
-
-      const shellEnv = await getShellEnv();
-      const gitBinPath = await whichGit(shellEnv);
-      if (gitBinPath) {
-        data.gitBinPath = gitBinPath;
-      }
-
-      if (data.gitUserName === "") {
-        data.gitUserName = await getGitGlobalConfig(
-          data.gitBinPath,
-          "user.name",
-          shellEnv,
-        );
-      }
-      if (data.gitUserEmail === "") {
-        data.gitUserEmail = await getGitGlobalConfig(
-          data.gitBinPath,
-          "user.email",
-          shellEnv,
-        );
-      }
-
-      console.log("git-backup data", data);
-
-      return data;
+    async loadSettings() {
+      this.settings = Object.assign(
+        {},
+        DEFAULT_SETTINGS,
+        await this.loadData(),
+      );
     }
 
-    async gitSync() {
-      const data = await this.loadDataWithDefaults();
-      const {
-        gitBinPath,
-        gitRemoteURL,
-        gitBranchName,
-        gitUserName,
-        gitUserEmail,
-      } = data;
+    /**
+     * Save settings to disk.
+     * @returns {Promise<void>}
+     */
+    async saveSettings() {
+      await this.saveData(this.settings);
+    }
+
+    /**
+     * Initialize the status bar item.
+     */
+    initStatusBarItem() {
+      const item = this.addStatusBarItem();
+      obsidian.setIcon(item, "git-branch");
+      let span;
+      span = item.createSpan();
+      span.innerHTML = "&nbsp;";
+      span.className = "spacer";
+      span = item.createSpan();
+      span.className = "git-diffstat";
+      this.statusBarItem = item;
+    }
+
+    enqueueUpdateStatusBar() {
+      if (this.statusBarUpdateLock) return;
+      this.statusBarUpdateLock = true;
+      this.updateStatusBar()
+        .catch((error) => {
+          console.error(error);
+        })
+        .finally(() => {
+          this.statusBarUpdateLock = false;
+        });
+    }
+
+    async updateStatusBar() {
+      if (!this.statusBarItem || !this.gitBinPath) return;
+
+      const span = this.statusBarItem.querySelector("span.git-diffstat");
+      assert(span, "status bar missing span");
+
+      span.textContent = await gitStat(
+        this.gitBinPath,
+        this.gitDir,
+        this.gitWorkTree,
+      );
+    }
+
+    /**
+     * Get path to bare git repository in cache.
+     * @returns {string}
+     */
+    get gitDir() {
+      const vaultName = this.app.vault.getName();
+      assert(vaultName !== "", "vaultName is not set");
+      return path.join(getCacheDir(), `${vaultName}.git`);
+    }
+
+    /**
+     * Get path to Vault directory to use as git work tree.
+     * @returns {string}
+     */
+    get gitWorkTree() {
       const dataAdapter = this.app.vault.adapter;
       assert(
         dataAdapter instanceof obsidian.FileSystemAdapter,
         "dataAdapter is FileSystemAdapter",
       );
-      const gitWorkTree = dataAdapter.getBasePath();
+      return dataAdapter.getBasePath();
+    }
 
-      const vaultName = this.app.vault.getName();
-      const cacheGitDir = path.join(getCacheDir(), `${vaultName}.git`);
+    async gitSync() {
+      assert(this.gitBinPath, "gitBinPath isn't set");
+      assert(this.settings.gitRemoteURL, "gitRemoteURL isn't set");
 
-      assert(gitRemoteURL, "gitRemoteURL isn't set");
-      await gitFetch(gitBinPath, cacheGitDir, gitRemoteURL);
+      await gitFetch(this.gitBinPath, this.gitDir, this.settings.gitRemoteURL);
 
       const commitMessage = `vault backup: ${getTimestamp()}`;
       await gitCommitAll(
-        gitBinPath,
-        cacheGitDir,
-        gitWorkTree,
+        this.gitBinPath,
+        this.gitDir,
+        this.gitWorkTree,
         commitMessage,
-        gitUserName,
-        gitUserEmail,
+        this.settings.gitUserName,
+        this.settings.gitUserEmail,
       );
-      await gitPush(gitBinPath, cacheGitDir, "origin", gitBranchName);
+      await gitPush(
+        this.gitBinPath,
+        this.gitDir,
+        "origin",
+        this.settings.gitBranchName,
+      );
     }
+  }
+
+  class GitBackupSettingTab extends PluginSettingTab {
+    /** @type {GitBackupPlugin} */
+    plugin;
+
+    /**
+     *
+     * @param {obsidian.App} app
+     * @param {GitBackupPlugin} plugin
+     */
+    constructor(app, plugin) {
+      super(app, plugin);
+      this.plugin = plugin;
+    }
+
+    display() {
+      const { containerEl } = this;
+
+      containerEl.empty();
+
+      new Setting(containerEl).setName("Git Remote URL").addText((text) =>
+        text
+          .setValue(this.plugin.settings.gitRemoteURL)
+          .onChange(async (value) => {
+            this.plugin.settings.gitRemoteURL = value;
+            await this.plugin.saveSettings();
+          }),
+      );
+
+      new Setting(containerEl).setName("Git Branch Name").addText((text) =>
+        text
+          .setValue(this.plugin.settings.gitBranchName)
+          .onChange(async (value) => {
+            this.plugin.settings.gitBranchName = value;
+            await this.plugin.saveSettings();
+          }),
+      );
+
+      new Setting(containerEl).setName("Git User Name").addText((text) =>
+        text
+          .setValue(this.plugin.settings.gitUserName)
+          .onChange(async (value) => {
+            this.plugin.settings.gitUserName = value;
+            await this.plugin.saveSettings();
+          }),
+      );
+
+      new Setting(containerEl).setName("Git User Email").addText((text) => {
+        text
+          .setValue(this.plugin.settings.gitUserEmail)
+          .onChange(async (value) => {
+            this.plugin.settings.gitUserEmail = value;
+            await this.plugin.saveSettings();
+          });
+      });
+    }
+  }
+
+  /**
+   * Get the path to the git binary.
+   *
+   * @returns {Promise<string | null>}
+   */
+  async function detectGit() {
+    const env = await getShellEnv();
+    const { stdout } = await execFile("which", ["git"], { env });
+    const result = stdout.trim();
+    return result === "" ? null : result;
   }
 
   /**
@@ -145,31 +285,6 @@ module.exports = (() => {
       if (key) env[key] = value;
     }
     return env;
-  }
-
-  /**
-   * Get the path to the git binary.
-   *
-   * @param {Record<string, string>} env
-   * @returns {Promise<string>}
-   */
-  async function whichGit(env) {
-    const { stdout } = await execFile("which", ["git"], { env });
-    return stdout.trim();
-  }
-
-  /**
-   * Get git config global value.
-   *
-   * @param {string} gitBinPath
-   * @param {string} name
-   * @param {Record<string, string>} shellEnv
-   * @returns {Promise<string>}
-   */
-  async function getGitGlobalConfig(gitBinPath, name, shellEnv) {
-    const git = execEnv.bind(null, gitBinPath, shellEnv);
-    const { stdout } = await git(["config", "--global", name]);
-    return stdout.trim();
   }
 
   /**
@@ -213,6 +328,37 @@ module.exports = (() => {
   }
 
   /**
+   * Get git stats for uncommitted changes.
+   *
+   * @param {string} gitBinPath
+   * @param {string} gitDir
+   * @param {string} gitWorkTree
+   * @returns {Promise<string>}
+   */
+  async function gitStat(gitBinPath, gitDir, gitWorkTree) {
+    const env = { GIT_DIR: gitDir, GIT_WORK_TREE: gitWorkTree };
+    const git = execEnv.bind(null, gitBinPath, env);
+    const { stdout } = await git(["diff", "--numstat", "HEAD"]);
+
+    const stats = {
+      filesChanged: 0,
+      insertions: 0,
+      deletions: 0,
+    };
+
+    for (const line of stdout.trim().split("\n")) {
+      if (line.trim()) {
+        const cols = line.split(/\s+/, 3);
+        stats.filesChanged++;
+        stats.insertions += parseInt(cols[0]);
+        stats.deletions += parseInt(cols[1]);
+      }
+    }
+
+    return `${stats.filesChanged} files changed`;
+  }
+
+  /**
    * Run `git commit` in the given git directory.
    * @param {string} gitBinPath
    * @param {string} gitDir
@@ -230,12 +376,8 @@ module.exports = (() => {
     gitUserName,
     gitUserEmail,
   ) {
-    const randSuffix = Math.random().toString(36).substring(2, 15);
-    const indexFile = path.join(gitDir, `index.${randSuffix}`);
-
     const env = {
       GIT_DIR: gitDir,
-      GIT_INDEX_FILE: indexFile,
       GIT_WORK_TREE: gitWorkTree,
       GIT_AUTHOR_NAME: gitUserName,
       GIT_AUTHOR_EMAIL: gitUserEmail,
@@ -245,9 +387,7 @@ module.exports = (() => {
     const git = execEnv.bind(null, gitBinPath, env);
 
     try {
-      // I don't think I need to reset the index if I'm using a temp file
-      // await git(["reset", "--mixed", "HEAD"]);
-
+      await git(["reset", "--mixed", "HEAD"]);
       await git(["add", "."]);
 
       let hasChanges;
@@ -269,7 +409,6 @@ module.exports = (() => {
       }
     } finally {
       await unlinkForce(path.join(gitDir, "COMMIT_EDITMSG"));
-      await unlinkForce(indexFile);
     }
   }
 
