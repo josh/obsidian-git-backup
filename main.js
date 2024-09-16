@@ -70,13 +70,16 @@ module.exports = (() => {
         callback: () => {
           const start = Date.now();
           this.gitSync()
-            .then(() => {
+            .then((message) => {
               const duration = Date.now() - start;
-              new Notice(`Git backup completed in ${duration}ms`);
+              new Notice(`Git backup [${duration}ms]: ${message}`);
             })
             .catch((error) => {
               console.error(error);
-              new Notice(`Error creating Git backup: ${error}`);
+              new Notice(`Git backup [error]: ${error}`);
+            })
+            .finally(() => {
+              this.enqueueUpdateStatusBar();
             });
         },
       });
@@ -180,6 +183,11 @@ module.exports = (() => {
       return dataAdapter.getBasePath();
     }
 
+    /**
+     * Sync local git repository with remote.
+     *
+     * @returns {Promise<string>}
+     */
     async gitSync() {
       assert(this.gitBinPath, "gitBinPath isn't set");
       assert(this.settings.gitRemoteURL, "gitRemoteURL isn't set");
@@ -187,7 +195,7 @@ module.exports = (() => {
       await gitFetch(this.gitBinPath, this.gitDir, this.settings.gitRemoteURL);
 
       const commitMessage = `vault backup: ${getTimestamp()}`;
-      await gitCommitAll(
+      const commit = await gitCommitAll(
         this.gitBinPath,
         this.gitDir,
         this.gitWorkTree,
@@ -195,12 +203,17 @@ module.exports = (() => {
         this.settings.gitUserName,
         this.settings.gitUserEmail,
       );
-      await gitPush(
-        this.gitBinPath,
-        this.gitDir,
-        "origin",
-        this.settings.gitBranchName,
-      );
+      if (commit) {
+        await gitPush(
+          this.gitBinPath,
+          this.gitDir,
+          "origin",
+          this.settings.gitBranchName,
+        );
+        return `Pushed ${commit.filesChanged} files`;
+      } else {
+        return "No changes";
+      }
     }
   }
 
@@ -345,14 +358,23 @@ module.exports = (() => {
     const env = { GIT_DIR: gitDir, GIT_WORK_TREE: gitWorkTree };
     const git = execEnv.bind(null, gitBinPath, env);
     const { stdout } = await git(["diff", "--numstat", "HEAD"]);
+    return parseGitDiffNumstat(stdout);
+  }
 
+  /**
+   * Parse git diff --numstat output.
+   *
+   * @param {string} out
+   * @returns {{ filesChanged: number; insertions: number; deletions: number; }}
+   */
+  function parseGitDiffNumstat(out) {
     const stats = {
       filesChanged: 0,
       insertions: 0,
       deletions: 0,
     };
 
-    for (const line of stdout.trim().split("\n")) {
+    for (const line of out.trim().split("\n")) {
       if (line.trim()) {
         const cols = line.split(/\s+/, 3);
         stats.filesChanged++;
@@ -372,7 +394,7 @@ module.exports = (() => {
    * @param {string} commitMessage
    * @param {string} gitUserName
    * @param {string} gitUserEmail
-   * @returns {Promise<string | null>}
+   * @returns {Promise<{ commitSha: string; filesChanged: number; insertions: number; deletions: number; } | null>}
    */
   async function gitCommitAll(
     gitBinPath,
@@ -396,19 +418,15 @@ module.exports = (() => {
       await git(["reset", "--mixed", "HEAD"]);
       await git(["add", "."]);
 
-      let hasChanges;
-      try {
-        await git(["diff", "--staged", "--quiet"]);
-        hasChanges = false;
-      } catch (error) {
-        hasChanges = true;
-      }
+      const { stdout } = await git(["diff", "--staged", "--numstat"]);
+      const stats = parseGitDiffNumstat(stdout);
 
-      if (hasChanges) {
+      if (stats.filesChanged > 0) {
         await git(["commit", "--message", commitMessage]);
         const { stdout } = await git(["rev-parse", "HEAD"]);
-        console.log("git commit:", stdout.trim());
-        return stdout.trim();
+        const commitSha = stdout.trim();
+        console.assert(commitSha.length === 40, "Bad commit SHA");
+        return { commitSha, ...stats };
       } else {
         console.log("git commit: no changes");
         return null;
