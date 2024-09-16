@@ -64,6 +64,26 @@ module.exports = (() => {
         this.app.vault.on("rename", this.enqueueUpdateStatusBar.bind(this)),
       );
 
+      // Update status bar every 5 minutes
+      this.registerInterval(
+        window.setInterval(
+          () => {
+            this.enqueueUpdateStatusBar();
+          },
+          5 * 60 * 1000,
+        ),
+      );
+
+      // Sync changes every hour
+      this.registerInterval(
+        window.setInterval(
+          () => {
+            this.gitSync();
+          },
+          60 * 60 * 1000,
+        ),
+      );
+
       this.addCommand({
         id: "git-backup",
         name: "Backup",
