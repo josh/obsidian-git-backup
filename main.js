@@ -12,15 +12,24 @@ module.exports = (() => {
   const execFile = util.promisify(child_process.execFile);
 
   const DEFAULT_SETTINGS = Object.freeze({
+    enabled: true,
+    gitBinPath: "",
+    gitDir: "",
     gitRemoteURL: "",
     gitBranchName: "main",
     gitUserName: "",
     gitUserEmail: "",
   });
 
+  // Local settings are stored in `localStorage` rather than serialized to data.json
+  const LOCAL_SETTINGS = Object.freeze(["enabled", "gitBinPath", "gitDir"]);
+
   class GitBackupPlugin extends Plugin {
     /**
      * @type {{
+     *   enabled: boolean,
+     *   gitBinPath: string,
+     *   gitDir: string,
      *   gitRemoteURL: string,
      *   gitBranchName: string,
      *   gitUserName: string,
@@ -29,9 +38,6 @@ module.exports = (() => {
      */
     settings = DEFAULT_SETTINGS;
 
-    /** @type {string | null} */
-    gitBinPath = null;
-
     /** @type {HTMLElement | null} */
     statusBarItem = null;
 
@@ -39,15 +45,18 @@ module.exports = (() => {
     statusBarUpdateLock = false;
 
     async onload() {
-      this.gitBinPath = await detectGit();
-      if (this.gitBinPath === null) {
+      await this.loadSettings();
+
+      this.addSettingTab(new GitBackupSettingTab(this.app, this));
+
+      if (this.settings.enabled == false) {
+        return;
+      }
+
+      if (!this.settings.gitBinPath) {
         console.warn("Failed to load git-backup plugin, git not found");
         return;
       }
-      console.log("Using git", this.gitBinPath);
-
-      await this.loadSettings();
-      this.addSettingTab(new GitBackupSettingTab(this.app, this));
 
       this.initStatusBarItem();
       this.enqueueUpdateStatusBar();
@@ -119,9 +128,43 @@ module.exports = (() => {
      * @returns {Promise<void>}
      */
     async loadSettings() {
+      /** @type {Record<string, any>} */
+      let localSettings = {};
+      const localJSON = window.localStorage.getItem(
+        `${this.manifest.id}:settings`,
+      );
+      if (localJSON) {
+        try {
+          localSettings = JSON.parse(localJSON);
+        } catch (error) {
+          console.assert(
+            !error,
+            `Failed to parse ${this.manifest.id}:settings`,
+            error,
+          );
+        }
+      }
+
+      let saveSettings = false;
+
+      if (!localSettings.gitBinPath) {
+        localSettings.gitBinPath = await detectGit();
+        saveSettings = true;
+      }
+
+      if (!localSettings.gitDir) {
+        localSettings.gitDir = this.defaultGitDir;
+        saveSettings = true;
+      }
+
+      if (saveSettings) {
+        await this.saveSettings();
+      }
+
       this.settings = Object.assign(
         {},
         DEFAULT_SETTINGS,
+        localSettings,
         await this.loadData(),
       );
     }
@@ -131,7 +174,24 @@ module.exports = (() => {
      * @returns {Promise<void>}
      */
     async saveSettings() {
-      await this.saveData(this.settings);
+      /** @type {Record<string, any>} */
+      const localSettings = {};
+      /** @type {Record<string, any>} */
+      const dataSettings = {};
+
+      for (const [key, value] of Object.entries(this.settings)) {
+        if (LOCAL_SETTINGS.includes(key)) {
+          localSettings[key] = value;
+        } else {
+          dataSettings[key] = value;
+        }
+      }
+
+      window.localStorage.setItem(
+        `${this.manifest.id}:settings`,
+        JSON.stringify(localSettings),
+      );
+      await this.saveData(dataSettings);
     }
 
     /**
@@ -162,16 +222,14 @@ module.exports = (() => {
     }
 
     async updateStatusBar() {
-      if (!this.statusBarItem || !this.gitBinPath) return;
+      const { enabled, gitBinPath, gitDir } = this.settings;
+
+      if (!this.statusBarItem || !enabled || !gitBinPath || !gitDir) return;
 
       const span = this.statusBarItem.querySelector("span.git-diffstat");
       assert(span, "status bar missing span");
 
-      const stats = await gitStat(
-        this.gitBinPath,
-        this.gitDir,
-        this.gitWorkTree,
-      );
+      const stats = await gitStat(gitBinPath, gitDir, this.gitWorkTree);
 
       if (stats.filesChanged > 0) {
         span.textContent = `${stats.filesChanged} files changed`;
@@ -184,7 +242,7 @@ module.exports = (() => {
      * Get path to bare git repository in cache.
      * @returns {string}
      */
-    get gitDir() {
+    get defaultGitDir() {
       const vaultName = this.app.vault.getName();
       assert(vaultName !== "", "vaultName is not set");
       return path.join(getCacheDir(), `${vaultName}.git`);
@@ -209,27 +267,34 @@ module.exports = (() => {
      * @returns {Promise<string>}
      */
     async gitSync() {
-      assert(this.gitBinPath, "gitBinPath isn't set");
-      assert(this.settings.gitRemoteURL, "gitRemoteURL isn't set");
+      const {
+        enabled,
+        gitBinPath,
+        gitDir,
+        gitRemoteURL,
+        gitBranchName,
+        gitUserName,
+        gitUserEmail,
+      } = this.settings;
 
-      await gitFetch(this.gitBinPath, this.gitDir, this.settings.gitRemoteURL);
+      assert(enabled, "plugin is disabled");
+      assert(gitBinPath, "gitBinPath isn't set");
+      assert(gitDir, "gitDir isn't set");
+      assert(gitRemoteURL, "gitRemoteURL isn't set");
+
+      await gitFetch(gitBinPath, gitDir, gitRemoteURL);
 
       const commitMessage = `vault backup: ${getTimestamp()}`;
       const commit = await gitCommitAll(
-        this.gitBinPath,
-        this.gitDir,
+        gitBinPath,
+        gitDir,
         this.gitWorkTree,
         commitMessage,
-        this.settings.gitUserName,
-        this.settings.gitUserEmail,
+        gitUserName,
+        gitUserEmail,
       );
       if (commit) {
-        await gitPush(
-          this.gitBinPath,
-          this.gitDir,
-          "origin",
-          this.settings.gitBranchName,
-        );
+        await gitPush(gitBinPath, gitDir, "origin", gitBranchName);
         return `Pushed ${commit.filesChanged} files`;
       } else {
         return "No changes";
@@ -255,6 +320,20 @@ module.exports = (() => {
       const { containerEl } = this;
 
       containerEl.empty();
+
+      // Add <style scoped> to containerEl
+      // and set width of text inputs to 100%
+      const style = document.createElement("style");
+      style.textContent = `
+        .setting-item-control > input[type="text"] {
+          width: 100%;
+          text-align: right;
+        }
+      `;
+      style.setAttribute("scoped", "");
+      containerEl.appendChild(style);
+
+      new Setting(containerEl).setName("Synced Settings").setHeading();
 
       new Setting(containerEl).setName("Git Remote URL").addText((text) =>
         text
@@ -290,6 +369,33 @@ module.exports = (() => {
             this.plugin.settings.gitUserEmail = value;
             await this.plugin.saveSettings();
           });
+      });
+
+      new Setting(containerEl).setName("Local Settings").setHeading();
+
+      new Setting(containerEl).setName("Enabled").addToggle((toggle) => {
+        toggle
+          .setValue(this.plugin.settings.enabled)
+          .onChange(async (value) => {
+            this.plugin.settings.enabled = value;
+            await this.plugin.saveSettings();
+          });
+      });
+
+      new Setting(containerEl).setName("Git Bin Path").addText((text) =>
+        text
+          .setValue(this.plugin.settings.gitBinPath)
+          .onChange(async (value) => {
+            this.plugin.settings.gitBinPath = value;
+            await this.plugin.saveSettings();
+          }),
+      );
+
+      new Setting(containerEl).setName("Git Dir").addText((text) => {
+        text.setValue(this.plugin.settings.gitDir).onChange(async (value) => {
+          this.plugin.settings.gitDir = value;
+          await this.plugin.saveSettings();
+        });
       });
     }
   }
