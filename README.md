@@ -5,6 +5,7 @@ Backup your Obsidian vault to a git repository.
 ## Features
 
 - One-way backup to Git remote repository
+- Status bar icon showing unpushed changes
 - Works only on desktop, no mobile support
 - Stores `.git` directory outside the vault. Avoids iCloud or other cloud storage sync conflicts that corrupt the git repository itself.
 
