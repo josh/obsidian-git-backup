@@ -144,11 +144,17 @@ module.exports = (() => {
       const span = this.statusBarItem.querySelector("span.git-diffstat");
       assert(span, "status bar missing span");
 
-      span.textContent = await gitStat(
+      const stats = await gitStat(
         this.gitBinPath,
         this.gitDir,
         this.gitWorkTree,
       );
+
+      if (stats.filesChanged > 0) {
+        span.textContent = `${stats.filesChanged} files changed`;
+      } else {
+        span.textContent = "No changes";
+      }
     }
 
     /**
@@ -333,7 +339,7 @@ module.exports = (() => {
    * @param {string} gitBinPath
    * @param {string} gitDir
    * @param {string} gitWorkTree
-   * @returns {Promise<string>}
+   * @returns {Promise<{ filesChanged: number; insertions: number; deletions: number; }>}
    */
   async function gitStat(gitBinPath, gitDir, gitWorkTree) {
     const env = { GIT_DIR: gitDir, GIT_WORK_TREE: gitWorkTree };
@@ -355,7 +361,7 @@ module.exports = (() => {
       }
     }
 
-    return `${stats.filesChanged} files changed`;
+    return stats;
   }
 
   /**
