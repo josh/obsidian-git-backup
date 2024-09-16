@@ -1,4 +1,4 @@
-# obsidian-git
+# obsidian-git-backup
 
 Backup your Obsidian vault to a git repository.
 
