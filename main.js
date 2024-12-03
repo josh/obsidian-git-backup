@@ -19,6 +19,7 @@ module.exports = (() => {
     gitBranchName: "main",
     gitUserName: "",
     gitUserEmail: "",
+    gitIgnore: "",
   });
 
   // Local settings are stored in `localStorage` rather than serialized to data.json
@@ -33,7 +34,8 @@ module.exports = (() => {
      *   gitRemoteURL: string,
      *   gitBranchName: string,
      *   gitUserName: string,
-     *   gitUserEmail: string
+     *   gitUserEmail: string,
+     *   gitIgnore: string,
      * }}
      */
     settings = DEFAULT_SETTINGS;
@@ -275,6 +277,7 @@ module.exports = (() => {
         gitBranchName,
         gitUserName,
         gitUserEmail,
+        gitIgnore,
       } = this.settings;
 
       assert(enabled, "plugin is disabled");
@@ -292,6 +295,7 @@ module.exports = (() => {
         commitMessage,
         gitUserName,
         gitUserEmail,
+        gitIgnore,
       );
       if (commit) {
         await gitPush(gitBinPath, gitDir, "origin", gitBranchName);
@@ -367,6 +371,15 @@ module.exports = (() => {
           .setValue(this.plugin.settings.gitUserEmail)
           .onChange(async (value) => {
             this.plugin.settings.gitUserEmail = value;
+            await this.plugin.saveSettings();
+          });
+      });
+
+      new Setting(containerEl).setName("Git Ignore").addTextArea((text) => {
+        text
+          .setValue(this.plugin.settings.gitIgnore)
+          .onChange(async (value) => {
+            this.plugin.settings.gitIgnore = value;
             await this.plugin.saveSettings();
           });
       });
@@ -520,6 +533,7 @@ module.exports = (() => {
    * @param {string} commitMessage
    * @param {string} gitUserName
    * @param {string} gitUserEmail
+   * @param {string} gitIgnore
    * @returns {Promise<{ commitSha: string; filesChanged: number; insertions: number; deletions: number; } | null>}
    */
   async function gitCommitAll(
@@ -529,6 +543,7 @@ module.exports = (() => {
     commitMessage,
     gitUserName,
     gitUserEmail,
+    gitIgnore,
   ) {
     const env = {
       GIT_DIR: gitDir,
@@ -541,6 +556,8 @@ module.exports = (() => {
     const git = execEnv.bind(null, gitBinPath, env);
 
     try {
+      await writeFile(path.join(gitDir, "info", "exclude"), gitIgnore);
+
       await git(["reset", "--mixed", "HEAD"]);
       await git(["rm", "-r", "--cached", "."]);
       await git(["add", "."]);
@@ -621,6 +638,17 @@ module.exports = (() => {
     } else {
       throw new Error(`Unsupported platform: ${platform}`);
     }
+  }
+
+  /**
+   * Write contents to a file.
+   *
+   * @param {string} path
+   * @param {string} contents
+   * @returns {Promise<void>}
+   */
+  async function writeFile(path, contents) {
+    await fs.promises.writeFile(path, contents);
   }
 
   /**
