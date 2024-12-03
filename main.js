@@ -1,6 +1,6 @@
 module.exports = (() => {
   const obsidian = require("obsidian");
-  const { Plugin, PluginSettingTab, Setting, Notice } = obsidian;
+  const { moment, Plugin, PluginSettingTab, Setting, Notice } = obsidian;
 
   const child_process = require("node:child_process");
   const fs = require("node:fs");
@@ -19,11 +19,14 @@ module.exports = (() => {
     gitBranchName: "main",
     gitUserName: "",
     gitUserEmail: "",
+    gitCommitMessageTimestampFormat: "",
     gitIgnore: "",
   });
 
   // Local settings are stored in `localStorage` rather than serialized to data.json
   const LOCAL_SETTINGS = Object.freeze(["enabled", "gitBinPath", "gitDir"]);
+
+  const DEFAULT_COMMIT_MESSAGE_TIMESTAMP_FORMAT = "YYYY-MM-DD HH:mm:ss";
 
   class GitBackupPlugin extends Plugin {
     /**
@@ -35,6 +38,7 @@ module.exports = (() => {
      *   gitBranchName: string,
      *   gitUserName: string,
      *   gitUserEmail: string,
+     *   gitCommitMessageTimestampFormat: string,
      *   gitIgnore: string,
      * }}
      */
@@ -277,6 +281,7 @@ module.exports = (() => {
         gitBranchName,
         gitUserName,
         gitUserEmail,
+        gitCommitMessageTimestampFormat,
         gitIgnore,
       } = this.settings;
 
@@ -287,7 +292,11 @@ module.exports = (() => {
 
       await gitFetch(gitBinPath, gitDir, gitRemoteURL);
 
-      const commitMessage = `vault backup: ${getTimestamp()}`;
+      const timestamp = moment().format(
+        gitCommitMessageTimestampFormat ||
+          DEFAULT_COMMIT_MESSAGE_TIMESTAMP_FORMAT,
+      );
+      const commitMessage = `vault backup: ${timestamp}`;
       const commit = await gitCommitAll(
         gitBinPath,
         gitDir,
@@ -374,6 +383,18 @@ module.exports = (() => {
             await this.plugin.saveSettings();
           });
       });
+
+      new Setting(containerEl)
+        .setName("Git Commit Timestamp Format")
+        .addMomentFormat((text) => {
+          text
+            .setDefaultFormat(DEFAULT_COMMIT_MESSAGE_TIMESTAMP_FORMAT)
+            .setValue(this.plugin.settings.gitCommitMessageTimestampFormat)
+            .onChange(async (value) => {
+              this.plugin.settings.gitCommitMessageTimestampFormat = value;
+              await this.plugin.saveSettings();
+            });
+        });
 
       new Setting(containerEl).setName("Git Ignore").addTextArea((text) => {
         text
@@ -590,27 +611,6 @@ module.exports = (() => {
    */
   async function execEnv(file, env, args) {
     return await execFile(file, args, { env });
-  }
-
-  /**
-   * Get a timestamp in the format "YYYY-MM-DD HH:mm:ss".
-   * $ date +"%Y-%m-%d %H:%M:%S"
-   *
-   * @returns {string}
-   */
-  function getTimestamp() {
-    const now = new Date();
-    return now
-      .toLocaleString("en-US", {
-        year: "numeric",
-        month: "2-digit",
-        day: "2-digit",
-        hour: "2-digit",
-        minute: "2-digit",
-        second: "2-digit",
-        hour12: false,
-      })
-      .replace(/(\d+)\/(\d+)\/(\d+),/, "$3-$1-$2");
   }
 
   /**
