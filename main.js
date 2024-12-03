@@ -542,6 +542,7 @@ module.exports = (() => {
 
     try {
       await git(["reset", "--mixed", "HEAD"]);
+      await git(["rm", "-r", "--cached", "."]);
       await git(["add", "."]);
 
       const { stdout } = await git(["diff", "--staged", "--numstat"]);
