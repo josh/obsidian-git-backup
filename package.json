@@ -1,6 +1,6 @@
 {
   "name": "obsidian-git-backup",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Backup your Obsidian vault to a remote Git repository",
   "main": "main.js",
   "author": "Joshua Peek",
