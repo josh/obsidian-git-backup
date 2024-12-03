@@ -22,6 +22,8 @@ module.exports = (() => {
     gitCommitMessage: "",
     gitCommitMessageTimestampFormat: "",
     gitIgnore: "",
+    syncInterval: 60 * 60, // 1 hour
+    statusBarRefreshInterval: 5 * 60, // 5 minutes
   });
 
   // Local settings are stored in `localStorage` rather than serialized to data.json
@@ -43,6 +45,8 @@ module.exports = (() => {
      *   gitCommitMessage: string,
      *   gitCommitMessageTimestampFormat: string,
      *   gitIgnore: string,
+     *   syncInterval: number,
+     *   statusBarRefreshInterval: number,
      * }}
      */
     settings = DEFAULT_SETTINGS;
@@ -69,6 +73,7 @@ module.exports = (() => {
 
       this.initStatusBarItem();
       this.enqueueUpdateStatusBar();
+
       this.registerEvent(
         this.app.vault.on("create", this.enqueueUpdateStatusBar.bind(this)),
       );
@@ -82,25 +87,21 @@ module.exports = (() => {
         this.app.vault.on("rename", this.enqueueUpdateStatusBar.bind(this)),
       );
 
-      // Update status bar every 5 minutes
-      this.registerInterval(
-        window.setInterval(
-          () => {
+      if (this.settings.statusBarRefreshInterval) {
+        this.registerInterval(
+          window.setInterval(() => {
             this.enqueueUpdateStatusBar();
-          },
-          5 * 60 * 1000,
-        ),
-      );
+          }, this.settings.statusBarRefreshInterval * 1000),
+        );
+      }
 
-      // Sync changes every hour
-      this.registerInterval(
-        window.setInterval(
-          () => {
+      if (this.settings.syncInterval) {
+        this.registerInterval(
+          window.setInterval(() => {
             this.gitSync();
-          },
-          60 * 60 * 1000,
-        ),
-      );
+          }, this.settings.syncInterval * 1000),
+        );
+      }
 
       this.addCommand({
         id: "git-backup",
@@ -421,6 +422,32 @@ module.exports = (() => {
             await this.plugin.saveSettings();
           });
       });
+
+      new Setting(containerEl).setName("Sync Interval").addText((text) =>
+        text
+          .setValue(`${this.plugin.settings.syncInterval}`)
+          .onChange(async (value) => {
+            const interval = parseInt(value);
+            if (interval) {
+              this.plugin.settings.syncInterval = interval;
+              await this.plugin.saveSettings();
+            }
+          }),
+      );
+
+      new Setting(containerEl)
+        .setName("Status Bar Refresh Interval")
+        .addText((text) =>
+          text
+            .setValue(`${this.plugin.settings.statusBarRefreshInterval}`)
+            .onChange(async (value) => {
+              const interval = parseInt(value);
+              if (interval) {
+                this.plugin.settings.statusBarRefreshInterval = interval;
+                await this.plugin.saveSettings();
+              }
+            }),
+        );
 
       new Setting(containerEl).setName("Local Settings").setHeading();
 
