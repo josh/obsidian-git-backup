@@ -19,6 +19,7 @@ module.exports = (() => {
     gitBranchName: "main",
     gitUserName: "",
     gitUserEmail: "",
+    gitCommitMessage: "",
     gitCommitMessageTimestampFormat: "",
     gitIgnore: "",
   });
@@ -26,6 +27,7 @@ module.exports = (() => {
   // Local settings are stored in `localStorage` rather than serialized to data.json
   const LOCAL_SETTINGS = Object.freeze(["enabled", "gitBinPath", "gitDir"]);
 
+  const DEFAULT_COMMIT_MESSAGE = "vault backup: ${timestamp}";
   const DEFAULT_COMMIT_MESSAGE_TIMESTAMP_FORMAT = "YYYY-MM-DD HH:mm:ss";
 
   class GitBackupPlugin extends Plugin {
@@ -38,6 +40,7 @@ module.exports = (() => {
      *   gitBranchName: string,
      *   gitUserName: string,
      *   gitUserEmail: string,
+     *   gitCommitMessage: string,
      *   gitCommitMessageTimestampFormat: string,
      *   gitIgnore: string,
      * }}
@@ -281,6 +284,7 @@ module.exports = (() => {
         gitBranchName,
         gitUserName,
         gitUserEmail,
+        gitCommitMessage,
         gitCommitMessageTimestampFormat,
         gitIgnore,
       } = this.settings;
@@ -296,7 +300,10 @@ module.exports = (() => {
         gitCommitMessageTimestampFormat ||
           DEFAULT_COMMIT_MESSAGE_TIMESTAMP_FORMAT,
       );
-      const commitMessage = `vault backup: ${timestamp}`;
+      const commitMessage = (
+        gitCommitMessage || DEFAULT_COMMIT_MESSAGE
+      ).replace("${timestamp}", timestamp);
+
       const commit = await gitCommitAll(
         gitBinPath,
         gitDir,
@@ -380,6 +387,16 @@ module.exports = (() => {
           .setValue(this.plugin.settings.gitUserEmail)
           .onChange(async (value) => {
             this.plugin.settings.gitUserEmail = value;
+            await this.plugin.saveSettings();
+          });
+      });
+
+      new Setting(containerEl).setName("Git Commit Message").addText((text) => {
+        text
+          .setPlaceholder(DEFAULT_COMMIT_MESSAGE)
+          .setValue(this.plugin.settings.gitCommitMessage)
+          .onChange(async (value) => {
+            this.plugin.settings.gitCommitMessage = value;
             await this.plugin.saveSettings();
           });
       });
