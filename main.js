@@ -169,6 +169,7 @@ module.exports = (() => {
 
       if (saveSettings) {
         await this.saveSettings();
+        saveSettings = false;
       }
 
       this.settings = Object.assign(
@@ -177,6 +178,23 @@ module.exports = (() => {
         localSettings,
         await this.loadData(),
       );
+
+      if (!this.settings.gitUserName) {
+        this.settings.gitUserName = await getGitConfig("user.name");
+        saveSettings = true;
+      }
+
+      if (!this.settings.gitUserEmail) {
+        this.settings.gitUserEmail = await getGitConfig("user.email");
+        saveSettings = true;
+      }
+
+      if (saveSettings) {
+        await this.saveSettings();
+        saveSettings = false;
+      }
+
+      console.log(this.settings);
     }
 
     /**
@@ -508,6 +526,27 @@ module.exports = (() => {
       if (key) env[key] = value;
     }
     return env;
+  }
+
+  /**
+   * Get git config global value.
+   *
+   * @param {string} name
+   * @returns {Promise<string>}
+   */
+  async function getGitConfig(name) {
+    try {
+      const env = await getShellEnv();
+      const { stdout } = await execEnv("git", env, [
+        "config",
+        "--global",
+        name,
+      ]);
+      return stdout.trim();
+    } catch (error) {
+      console.warn(`Failed to get git config ${name}:`, error);
+      return "";
+    }
   }
 
   /**
