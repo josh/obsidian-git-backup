@@ -1,7 +1,7 @@
 {
   "id": "obsidian-git-backup",
   "name": "Git Backup",
-  "version": "0.2.0",
+  "version": "1.0.0",
   "minAppVersion": "1.6.0",
   "description": "Backup your Obsidian vault to a git repository.",
   "author": "Joshua Peek",
